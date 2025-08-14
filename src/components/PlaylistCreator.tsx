@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { Trash2, GripVertical, Play, Pause, SkipForward, SkipBack, Download, Copy, Upload } from "lucide-react";
+import { Trash2, GripVertical, Play, Pause, SkipForward, SkipBack, Download, Copy, Upload, Globe, Plus, Eye, EyeOff } from "lucide-react";
 
 interface VideoItem {
   id: string;
@@ -19,7 +19,10 @@ export default function PlaylistCreator() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [newUrl, setNewUrl] = useState("");
   const [bulkUrls, setBulkUrls] = useState("");
+  const [showBrowser, setShowBrowser] = useState(false);
+  const [browserUrl, setBrowserUrl] = useState("https://www.example.com");
   const playerRef = useRef<HTMLIFrameElement>(null);
+  const browserRef = useRef<HTMLIFrameElement>(null);
 
   // Extract video ID and create embed URL based on platform
   const getEmbedUrl = (url: string): string => {
@@ -37,6 +40,14 @@ export default function PlaylistCreator() {
           const newUrl = `${urlObj.origin}/embed/${videoId}`;
           return newUrl;
         }
+      }
+    }
+
+    // Transform view_video.php?viewkey= pattern to /embed/
+    if (urlObj.pathname.includes('/view_video.php') && urlObj.searchParams.has('viewkey')) {
+      const viewkey = urlObj.searchParams.get('viewkey');
+      if (viewkey) {
+        return `${urlObj.origin}/embed/${viewkey}`;
       }
     }
 
@@ -158,6 +169,18 @@ export default function PlaylistCreator() {
 
   const togglePlayPause = () => {
     setIsPlaying(!isPlaying);
+    // Note: This only updates UI state. Iframe videos cannot be controlled externally due to security restrictions.
+  };
+
+  // Browser functionality
+  const addCurrentBrowserUrl = () => {
+    if (browserUrl) {
+      addVideo(browserUrl);
+    }
+  };
+
+  const navigateBrowser = (url: string) => {
+    setBrowserUrl(url);
   };
 
   const currentVideo = playlist[currentVideoIndex];
@@ -382,6 +405,62 @@ export default function PlaylistCreator() {
             </div>
           </div>
         </div>
+      </Card>
+
+      {/* Mini Browser */}
+      <Card className="p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-2xl font-bold">Mini Browser</h2>
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={() => setShowBrowser(!showBrowser)}
+          >
+            {showBrowser ? <EyeOff className="h-4 w-4 mr-2" /> : <Eye className="h-4 w-4 mr-2" />}
+            {showBrowser ? 'Hide Browser' : 'Show Browser'}
+          </Button>
+        </div>
+        
+        {showBrowser && (
+          <div className="space-y-4">
+            <div className="flex space-x-2">
+              <Input
+                placeholder="Enter website URL"
+                value={browserUrl}
+                onChange={(e) => setBrowserUrl(e.target.value)}
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter') {
+                    navigateBrowser(browserUrl);
+                  }
+                }}
+              />
+              <Button onClick={() => navigateBrowser(browserUrl)}>
+                <Globe className="h-4 w-4 mr-2" />
+                Go
+              </Button>
+              <Button variant="outline" onClick={addCurrentBrowserUrl}>
+                <Plus className="h-4 w-4 mr-2" />
+                Add to Playlist
+              </Button>
+            </div>
+            
+            <div className="aspect-video bg-muted rounded-lg overflow-hidden">
+              <iframe
+                ref={browserRef}
+                src={browserUrl}
+                className="w-full h-full"
+                title="Mini Browser"
+                sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+              />
+            </div>
+          </div>
+        )}
+        
+        {!showBrowser && (
+          <p className="text-muted-foreground text-center py-8">
+            Click "Show Browser" to browse websites and add videos directly to your playlist.
+          </p>
+        )}
       </Card>
 
       {/* Playlist Management */}
