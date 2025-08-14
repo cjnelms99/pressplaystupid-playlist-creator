@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { Trash2, GripVertical, Play, Pause, SkipForward, SkipBack } from "lucide-react";
+import { Trash2, GripVertical, Play, Pause, SkipForward, SkipBack, Download, Copy } from "lucide-react";
 
 interface VideoItem {
   id: string;
@@ -146,18 +146,79 @@ export default function PlaylistCreator() {
     setIsPlaying(!isPlaying);
   };
 
-  // Auto-play next video when current ends (simplified approach)
-  useEffect(() => {
-    if (playlist.length > 0 && isPlaying) {
-      const timer = setTimeout(() => {
-        nextVideo();
-      }, 30000); // Simplified: assume 30s per video, in real app you'd listen to video events
-
-      return () => clearTimeout(timer);
-    }
-  }, [currentVideoIndex, isPlaying, playlist.length]);
-
   const currentVideo = playlist[currentVideoIndex];
+
+  // Export playlist functionality
+  const exportPlaylistAsText = () => {
+    const playlistText = playlist.map((video, index) => 
+      `${index + 1}. ${video.title}\n   ${video.url}`
+    ).join('\n\n');
+    
+    const blob = new Blob([playlistText], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `playlist-${new Date().toISOString().split('T')[0]}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    toast.success("Playlist exported as text file");
+  };
+
+  const copyPlaylistToClipboard = async () => {
+    const urls = playlist.map(video => video.url).join('\n');
+    try {
+      await navigator.clipboard.writeText(urls);
+      toast.success("Playlist URLs copied to clipboard");
+    } catch (err) {
+      toast.error("Failed to copy to clipboard");
+    }
+  };
+
+  // Listen for iframe messages to detect video end
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      // YouTube iframe API messages
+      if (event.origin === 'https://www.youtube.com' && event.data) {
+        try {
+          const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+          if (data.event === 'video-progress' && data.info?.playerState === 0) {
+            // Video ended (playerState 0 = ended)
+            nextVideo();
+          }
+        } catch (e) {
+          // Ignore parsing errors
+        }
+      }
+      
+      // Vimeo iframe API messages
+      if (event.origin === 'https://player.vimeo.com' && event.data) {
+        try {
+          const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+          if (data.event === 'ended') {
+            nextVideo();
+          }
+        } catch (e) {
+          // Ignore parsing errors
+        }
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [currentVideoIndex, playlist.length]);
+
+  // Update iframe src when video changes to enable proper event listening
+  useEffect(() => {
+    if (currentVideo && playerRef.current) {
+      const embedUrl = getEmbedUrl(currentVideo.url);
+      if (playerRef.current.src !== embedUrl) {
+        playerRef.current.src = embedUrl;
+      }
+    }
+  }, [currentVideoIndex, currentVideo]);
 
   return (
     <section className="container mx-auto py-8 space-y-8">
@@ -245,7 +306,22 @@ export default function PlaylistCreator() {
 
       {/* Playlist Management */}
       <Card className="p-6">
-        <h2 className="text-2xl font-bold mb-4">Playlist ({playlist.length} videos)</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-2xl font-bold">Playlist ({playlist.length} videos)</h2>
+          
+          {playlist.length > 0 && (
+            <div className="flex items-center space-x-2">
+              <Button variant="outline" size="sm" onClick={copyPlaylistToClipboard}>
+                <Copy className="h-4 w-4 mr-2" />
+                Copy URLs
+              </Button>
+              <Button variant="outline" size="sm" onClick={exportPlaylistAsText}>
+                <Download className="h-4 w-4 mr-2" />
+                Export Playlist
+              </Button>
+            </div>
+          )}
+        </div>
         
         {playlist.length === 0 ? (
           <p className="text-muted-foreground text-center py-8">
