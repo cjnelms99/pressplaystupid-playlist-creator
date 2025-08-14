@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { Trash2, GripVertical, Play, Pause, SkipForward, SkipBack, Download, Copy } from "lucide-react";
+import { Trash2, GripVertical, Play, Pause, SkipForward, SkipBack, Download, Copy, Upload } from "lucide-react";
 
 interface VideoItem {
   id: string;
@@ -25,6 +25,20 @@ export default function PlaylistCreator() {
   const getEmbedUrl = (url: string): string => {
     const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`);
     const hostname = urlObj.hostname.toLowerCase();
+
+    // Transform specific site pattern: /videos/ -> /embed/ and extract ID after last hyphen
+    if (urlObj.pathname.includes('/videos/')) {
+      const pathParts = urlObj.pathname.split('/');
+      const videoPath = pathParts.find(part => part.includes('-'));
+      if (videoPath) {
+        const lastHyphenIndex = videoPath.lastIndexOf('-');
+        if (lastHyphenIndex !== -1) {
+          const videoId = videoPath.substring(lastHyphenIndex + 1);
+          const newUrl = `${urlObj.origin}/embed/${videoId}`;
+          return newUrl;
+        }
+      }
+    }
 
     // YouTube
     if (hostname.includes('youtube.com') || hostname.includes('youtu.be')) {
@@ -177,6 +191,44 @@ export default function PlaylistCreator() {
     }
   };
 
+  // Import playlist functionality
+  const importPlaylistFromFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const content = e.target?.result as string;
+      const urls = content
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0 && (line.startsWith('http') || line.includes('.')))
+        .map(line => {
+          // Extract URL if line contains title format "1. Title\n   URL"
+          const urlMatch = line.match(/https?:\/\/[^\s]+/) || line.match(/[^\s]+\.[a-z]{2,}/);
+          return urlMatch ? urlMatch[0] : line;
+        })
+        .filter(url => url.length > 0);
+
+      if (urls.length === 0) {
+        toast.error("No valid URLs found in file");
+        return;
+      }
+
+      const newVideos: VideoItem[] = urls.map((url, index) => ({
+        id: (Date.now() + index).toString(),
+        url,
+        title: `Video ${playlist.length + index + 1}`
+      }));
+
+      setPlaylist(prev => [...prev, ...newVideos]);
+      toast.success(`Imported ${urls.length} videos from file`);
+    };
+
+    reader.readAsText(file);
+    event.target.value = ''; // Reset file input
+  };
+
   // Listen for iframe messages to detect video end
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -202,6 +254,17 @@ export default function PlaylistCreator() {
           }
         } catch (e) {
           // Ignore parsing errors
+        }
+      }
+
+      // XPlayer iframe API messages
+      if (event.data && typeof event.data === 'object') {
+        if (event.data.type === 'xplayer_event' && event.data.event === 'ended') {
+          nextVideo();
+        }
+        // Also check for generic video end events
+        if (event.data.event === 'video_ended' || event.data.type === 'video_ended') {
+          nextVideo();
         }
       }
     };
@@ -297,9 +360,26 @@ export default function PlaylistCreator() {
               onChange={(e) => setBulkUrls(e.target.value)}
               rows={4}
             />
-            <Button onClick={addBulkVideos} disabled={!bulkUrls.trim()}>
-              Add All Videos
-            </Button>
+            <div className="flex space-x-2">
+              <Button onClick={addBulkVideos} disabled={!bulkUrls.trim()}>
+                Add All Videos
+              </Button>
+              <div className="relative">
+                <input
+                  type="file"
+                  accept=".txt,.m3u,.m3u8"
+                  onChange={importPlaylistFromFile}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  id="playlist-upload"
+                />
+                <Button variant="outline" asChild>
+                  <label htmlFor="playlist-upload" className="cursor-pointer">
+                    <Upload className="h-4 w-4 mr-2" />
+                    Import File
+                  </label>
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
       </Card>
