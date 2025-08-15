@@ -642,7 +642,7 @@ export default function PlaylistCreator() {
                 src={browserUrl}
                 className="w-full h-full"
                 title="Mini Browser"
-                sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+                sandbox="allow-scripts allow-popups allow-forms"
               />
             </div>
           </div>
