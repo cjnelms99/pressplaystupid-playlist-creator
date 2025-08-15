@@ -111,38 +111,112 @@ export default function PlaylistCreator() {
       const currentUrl = window.location.href;
       const title = document.title;
       const appUrl = '${window.location.origin}';
-      const data = JSON.stringify({url: currentUrl, title: title, timestamp: Date.now()});
-      localStorage.setItem('pendingVideoUrl', data);
-      window.open(appUrl + '?bookmarklet=true', '_blank');
+      
+      // Try to find and focus existing playlist window
+      const existingWindows = [];
+      try {
+        // Store reference in sessionStorage for window detection
+        const windowId = 'playlist_' + Date.now();
+        const videoData = {url: currentUrl, title: title, timestamp: Date.now(), windowId: windowId};
+        
+        // Use localStorage to broadcast to all open windows
+        localStorage.setItem('newVideoRequest', JSON.stringify(videoData));
+        localStorage.removeItem('newVideoRequest'); // Trigger storage event
+        
+        // Check if any window responded within 1 second
+        setTimeout(() => {
+          const response = localStorage.getItem('windowResponse_' + windowId);
+          if (!response) {
+            // No existing window responded, open new one
+            window.open(appUrl + '?video=' + encodeURIComponent(currentUrl) + '&title=' + encodeURIComponent(title), '_blank');
+          }
+          // Clean up
+          localStorage.removeItem('windowResponse_' + windowId);
+        }, 1000);
+        
+      } catch(e) {
+        // Fallback: just open new window
+        window.open(appUrl + '?video=' + encodeURIComponent(currentUrl) + '&title=' + encodeURIComponent(title), '_blank');
+      }
     })();`;
     return bookmarkletCode;
   };
 
-  // Check for bookmarklet data on component mount
+  // Multi-window coordination and bookmarklet handling
   useEffect(() => {
-    const checkBookmarkletData = () => {
-      const pendingData = localStorage.getItem('pendingVideoUrl');
-      if (pendingData) {
+    // Generate unique window ID for this instance
+    const windowId = 'window_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    
+    // Check for URL parameters (direct video add)
+    const urlParams = new URLSearchParams(window.location.search);
+    const videoUrl = urlParams.get('video');
+    const videoTitle = urlParams.get('title');
+    
+    if (videoUrl) {
+      addVideo(videoUrl);
+      toast.success(`Added "${videoTitle || 'Video'}" from bookmarklet`);
+      // Clean up URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+    
+    // Listen for storage events from other windows/bookmarklet
+    const handleStorageEvent = (e: StorageEvent) => {
+      if (e.key === 'newVideoRequest' && e.newValue) {
         try {
-          const data = JSON.parse(pendingData);
-          if (Date.now() - data.timestamp < 60000) { // Only if within last minute
+          const data = JSON.parse(e.newValue);
+          // Respond that this window exists and can handle the request
+          localStorage.setItem('windowResponse_' + data.windowId, windowId);
+          
+          // Ask user if they want to add the video to this window
+          const shouldAdd = window.confirm(
+            `Add "${data.title}" to this playlist?\n\nURL: ${data.url}`
+          );
+          
+          if (shouldAdd) {
             addVideo(data.url);
             toast.success(`Added "${data.title}" from bookmarklet`);
+            // Focus this window
+            window.focus();
           }
-          localStorage.removeItem('pendingVideoUrl');
         } catch (e) {
-          localStorage.removeItem('pendingVideoUrl');
+          console.error('Error handling video request:', e);
         }
       }
     };
-
-    checkBookmarkletData();
     
-    // Also check if URL params indicate bookmarklet usage
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('bookmarklet') === 'true') {
-      setTimeout(checkBookmarkletData, 500); // Small delay to ensure localStorage is set
-    }
+    // Also check localStorage on mount for missed requests
+    const checkMissedRequests = () => {
+      try {
+        const keys = Object.keys(localStorage);
+        const requestKeys = keys.filter(key => key.startsWith('newVideoRequest_'));
+        
+        requestKeys.forEach(key => {
+          const data = JSON.parse(localStorage.getItem(key) || '{}');
+          if (Date.now() - data.timestamp < 5000) { // Within last 5 seconds
+            localStorage.setItem('windowResponse_' + data.windowId, windowId);
+            const shouldAdd = window.confirm(
+              `Add "${data.title}" to this playlist?\n\nURL: ${data.url}`
+            );
+            
+            if (shouldAdd) {
+              addVideo(data.url);
+              toast.success(`Added "${data.title}" from bookmarklet`);
+            }
+          }
+          localStorage.removeItem(key);
+        });
+      } catch (e) {
+        console.error('Error checking missed requests:', e);
+      }
+    };
+    
+    window.addEventListener('storage', handleStorageEvent);
+    checkMissedRequests();
+    
+    // Cleanup
+    return () => {
+      window.removeEventListener('storage', handleStorageEvent);
+    };
   }, []);
 
   const addVideo = (url: string) => {
