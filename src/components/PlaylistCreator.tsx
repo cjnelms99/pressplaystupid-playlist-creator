@@ -24,10 +24,17 @@ export default function PlaylistCreator() {
   const playerRef = useRef<HTMLIFrameElement>(null);
   const browserRef = useRef<HTMLIFrameElement>(null);
 
-  // Extract video ID and create embed URL based on platform
+  // Enhanced URL parser that detects direct video files and various platforms
   const getEmbedUrl = (url: string): string => {
     const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`);
     const hostname = urlObj.hostname.toLowerCase();
+    const pathname = urlObj.pathname.toLowerCase();
+
+    // Check for direct video files first
+    const videoExtensions = ['.mp4', '.webm', '.ogg', '.mov', '.avi', '.mkv', '.m4v'];
+    if (videoExtensions.some(ext => pathname.endsWith(ext))) {
+      return url; // Return direct video URL for HTML5 video element
+    }
 
     // Transform specific site pattern: /videos/ -> /embed/ and extract ID after last hyphen
     if (urlObj.pathname.includes('/videos/')) {
@@ -78,9 +85,65 @@ export default function PlaylistCreator() {
       return `https://www.tiktok.com/embed/v2/${url}`;
     }
 
+    // Twitch
+    if (hostname.includes('twitch.tv')) {
+      const videoId = urlObj.pathname.split('/').pop();
+      if (urlObj.pathname.includes('/videos/')) {
+        return `https://player.twitch.tv/?video=${videoId}&parent=${window.location.hostname}`;
+      }
+    }
+
+    // Dailymotion
+    if (hostname.includes('dailymotion.com')) {
+      const videoId = urlObj.pathname.split('/video/')[1]?.split('_')[0];
+      if (videoId) {
+        return `https://www.dailymotion.com/embed/video/${videoId}`;
+      }
+    }
+
     // Default: try to embed directly
     return url;
   };
+
+  // Generate bookmarklet for users to add to their browser
+  const generateBookmarklet = () => {
+    const bookmarkletCode = `javascript:(function(){
+      const currentUrl = window.location.href;
+      const title = document.title;
+      const appUrl = '${window.location.origin}';
+      const data = JSON.stringify({url: currentUrl, title: title, timestamp: Date.now()});
+      localStorage.setItem('pendingVideoUrl', data);
+      window.open(appUrl + '?bookmarklet=true', '_blank');
+    })();`;
+    return bookmarkletCode;
+  };
+
+  // Check for bookmarklet data on component mount
+  useEffect(() => {
+    const checkBookmarkletData = () => {
+      const pendingData = localStorage.getItem('pendingVideoUrl');
+      if (pendingData) {
+        try {
+          const data = JSON.parse(pendingData);
+          if (Date.now() - data.timestamp < 60000) { // Only if within last minute
+            addVideo(data.url);
+            toast.success(`Added "${data.title}" from bookmarklet`);
+          }
+          localStorage.removeItem('pendingVideoUrl');
+        } catch (e) {
+          localStorage.removeItem('pendingVideoUrl');
+        }
+      }
+    };
+
+    checkBookmarkletData();
+    
+    // Also check if URL params indicate bookmarklet usage
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('bookmarklet') === 'true') {
+      setTimeout(checkBookmarkletData, 500); // Small delay to ensure localStorage is set
+    }
+  }, []);
 
   const addVideo = (url: string) => {
     if (!url.trim()) return;
@@ -320,14 +383,29 @@ export default function PlaylistCreator() {
         {currentVideo ? (
           <div className="space-y-4">
             <div className="aspect-video bg-muted rounded-lg overflow-hidden">
-              <iframe
-                ref={playerRef}
-                src={getEmbedUrl(currentVideo.url)}
-                className="w-full h-full"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
-                title={currentVideo.title}
-              />
+              {/* Check if it's a direct video file */}
+              {['.mp4', '.webm', '.ogg', '.mov', '.avi', '.mkv', '.m4v'].some(ext => 
+                currentVideo.url.toLowerCase().includes(ext)
+              ) ? (
+                <video
+                  controls
+                  autoPlay
+                  className="w-full h-full"
+                  onEnded={nextVideo}
+                >
+                  <source src={currentVideo.url} type="video/mp4" />
+                  Your browser does not support the video tag.
+                </video>
+              ) : (
+                <iframe
+                  ref={playerRef}
+                  src={getEmbedUrl(currentVideo.url)}
+                  className="w-full h-full"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                  title={currentVideo.title}
+                />
+              )}
             </div>
             
             <div className="flex items-center justify-between">
@@ -363,9 +441,11 @@ export default function PlaylistCreator() {
         <h2 className="text-2xl font-bold mb-4">Add Videos</h2>
         
         <div className="space-y-4">
+          {/* Single URL Input */}
           <div className="flex space-x-2">
             <Input
-              placeholder="Enter video URL (YouTube, Vimeo, Instagram, TikTok, etc.)"
+              type="url"
+              placeholder="Enter video URL (YouTube, Vimeo, direct .mp4, Instagram, TikTok...)"
               value={newUrl}
               onChange={(e) => setNewUrl(e.target.value)}
               onKeyPress={(e) => {
@@ -376,8 +456,41 @@ export default function PlaylistCreator() {
               }}
             />
             <Button onClick={() => { addVideo(newUrl); setNewUrl(""); }}>
-              Add Video
+              <Plus className="h-4 w-4 mr-2" />
+              Add
             </Button>
+          </div>
+
+          {/* Bookmarklet Generator */}
+          <div className="border rounded-lg p-4 bg-muted/50">
+            <h3 className="font-semibold mb-2">Browser Bookmarklet</h3>
+            <p className="text-sm text-muted-foreground mb-3">
+              Drag this link to your bookmarks bar to quickly add videos from any webpage:
+            </p>
+            <div className="flex items-center space-x-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  navigator.clipboard.writeText(generateBookmarklet());
+                  toast.success("Bookmarklet copied! Create a new bookmark and paste this as the URL.");
+                }}
+              >
+                <Copy className="h-4 w-4 mr-2" />
+                Copy Bookmarklet
+              </Button>
+              <a
+                href={generateBookmarklet()}
+                className="inline-flex items-center px-3 py-1 rounded-md bg-primary text-primary-foreground text-sm hover:bg-primary/90"
+                draggable="true"
+                onClick={(e) => e.preventDefault()}
+              >
+                Add to Playlist
+              </a>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              Note: Web Views are only available in mobile apps. In browsers, we're limited by X-Frame-Options security restrictions.
+            </p>
           </div>
           
           <div className="space-y-2">
