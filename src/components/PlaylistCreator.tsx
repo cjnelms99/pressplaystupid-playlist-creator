@@ -180,7 +180,12 @@ export default function PlaylistCreator() {
   };
 
   const navigateBrowser = (url: string) => {
-    setBrowserUrl(url);
+    // Add https:// prefix if no protocol is specified
+    let formattedUrl = url.trim();
+    if (formattedUrl && !formattedUrl.match(/^https?:\/\//)) {
+      formattedUrl = `https://${formattedUrl}`;
+    }
+    setBrowserUrl(formattedUrl);
   };
 
   const currentVideo = playlist[currentVideoIndex];
