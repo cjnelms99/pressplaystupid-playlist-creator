@@ -1,3 +1,11 @@
+//
+//  resolve.ts
+//  
+//
+//  Created by ChatGPT-5 on 8/15/25.
+//
+
+
 // pages/api/resolve.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import axios from "axios";

@@ -173,7 +173,7 @@ export default function PlaylistCreator() {
           );
           
           if (shouldAdd) {
-            addVideo(data.url);
+              resolveAndAdd(videoUrl, videoTitle || undefined);
             toast.success(`Added "${data.title}" from bookmarklet`);
             // Focus this window
             window.focus();
@@ -199,7 +199,7 @@ export default function PlaylistCreator() {
             );
             
             if (shouldAdd) {
-              addVideo(data.url);
+                resolveAndAdd(data.url, data.title);
               toast.success(`Added "${data.title}" from bookmarklet`);
             }
           }
@@ -232,6 +232,38 @@ export default function PlaylistCreator() {
     toast.success("Video added to playlist");
   };
 
+    async function resolveAndAdd(url: string, overrideTitle?: string) {
+      if (!url.trim()) return;
+
+      try {
+        const res = await fetch(`/api/resolve?url=${encodeURIComponent(url)}`);
+        const data = await res.json();
+
+        if (!data.ok) {
+          toast.error(data.error || "Could not resolve media");
+          return;
+        }
+
+        const usableUrl = data.embed?.url || data.media?.[0];
+        if (!usableUrl) {
+          toast.error("No playable media returned");
+          return;
+        }
+
+        const videoItem: VideoItem = {
+          id: Date.now().toString(),
+          url: usableUrl,
+          title: overrideTitle || data.title || `Video ${playlist.length + 1}`,
+          thumbnail: data.thumbnail || undefined,
+        };
+
+        setPlaylist(prev => [...prev, videoItem]);
+        toast.success(`Added "${videoItem.title}" to playlist`);
+      } catch (err: any) {
+        toast.error(err.message || "Resolver error");
+      }
+    }
+    
   const addBulkVideos = () => {
     const urls = bulkUrls
       .split('\n')
@@ -310,11 +342,11 @@ export default function PlaylistCreator() {
   };
 
   // Browser functionality
-  const addCurrentBrowserUrl = () => {
-    if (browserUrl) {
-      addVideo(browserUrl);
-    }
-  };
+    const addCurrentBrowserUrl = () => {
+      if (browserUrl) {
+        resolveAndAdd(browserUrl);
+      }
+    };
 
   const navigateBrowser = (url: string) => {
     // Add https:// prefix if no protocol is specified
@@ -524,12 +556,12 @@ export default function PlaylistCreator() {
               onChange={(e) => setNewUrl(e.target.value)}
               onKeyPress={(e) => {
                 if (e.key === 'Enter') {
-                  addVideo(newUrl);
+                    resolveAndAdd(data.url, data.title);
                   setNewUrl("");
                 }
               }}
             />
-            <Button onClick={() => { addVideo(newUrl); setNewUrl(""); }}>
+                <Button onClick={() => { resolveAndAdd(newUrl); setNewUrl(""); }}>
               <Plus className="h-4 w-4 mr-2" />
               Add
             </Button>
