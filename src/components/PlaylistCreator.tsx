@@ -3,14 +3,137 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Trash2, GripVertical, Play, Pause, SkipForward, SkipBack, Download, Copy, Upload, Globe, Plus, Eye, EyeOff } from "lucide-react";
+import { 
+  Trash2, 
+  GripVertical, 
+  Play, 
+  Pause, 
+  SkipForward, 
+  SkipBack, 
+  Download, 
+  Copy, 
+  Upload, 
+  Globe, 
+  Plus, 
+  Eye, 
+  EyeOff,
+  Save,
+  FolderOpen,
+  Search
+} from "lucide-react";
+
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import {
+  useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 interface VideoItem {
   id: string;
   url: string;
   title?: string;
   thumbnail?: string;
+}
+
+interface SavedPlaylist {
+  id: string;
+  name: string;
+  videos: VideoItem[];
+  created: string;
+  modified: string;
+}
+
+// Sortable Video Item Component
+function SortableVideoItem({ 
+  video, 
+  index, 
+  currentVideoIndex, 
+  onPlay, 
+  onRemove 
+}: {
+  video: VideoItem;
+  index: number;
+  currentVideoIndex: number;
+  onPlay: (index: number) => void;
+  onRemove: (id: string) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+  } = useSortable({ id: video.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`flex items-center space-x-3 p-3 rounded-lg border ${
+        index === currentVideoIndex ? 'bg-primary/10 border-primary' : 'bg-background'
+      }`}
+    >
+      <div 
+        className="cursor-grab active:cursor-grabbing"
+        {...attributes} 
+        {...listeners}
+      >
+        <GripVertical className="h-4 w-4 text-muted-foreground" />
+      </div>
+      
+      {video.thumbnail && (
+        <img 
+          src={video.thumbnail} 
+          alt={video.title} 
+          className="w-16 h-12 object-cover rounded flex-shrink-0"
+        />
+      )}
+      
+      <div className="flex-1 min-w-0">
+        <p className="font-medium truncate">{video.title}</p>
+        <p className="text-sm text-muted-foreground truncate">{video.url}</p>
+      </div>
+      
+      <div className="flex items-center space-x-2">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => onPlay(index)}
+          disabled={index === currentVideoIndex}
+        >
+          <Play className="h-4 w-4" />
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => onRemove(video.id)}
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 export default function PlaylistCreator() {
@@ -21,8 +144,60 @@ export default function PlaylistCreator() {
   const [bulkUrls, setBulkUrls] = useState("");
   const [showBrowser, setShowBrowser] = useState(false);
   const [browserUrl, setBrowserUrl] = useState("https://www.example.com");
+  
+  // YouTube Search
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  
+  // Playlist Management
+  const [savedPlaylists, setSavedPlaylists] = useState<SavedPlaylist[]>([]);
+  const [currentPlaylistName, setCurrentPlaylistName] = useState("");
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState<string>("");
+  
   const playerRef = useRef<HTMLIFrameElement>(null);
   const browserRef = useRef<HTMLIFrameElement>(null);
+
+  // Drag and drop sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  // Load saved playlists from localStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('playlist-creator-playlists');
+    if (saved) {
+      try {
+        setSavedPlaylists(JSON.parse(saved));
+      } catch (e) {
+        console.error('Failed to load saved playlists:', e);
+      }
+    }
+
+    // Load current playlist from localStorage
+    const currentPlaylist = localStorage.getItem('playlist-creator-current');
+    if (currentPlaylist) {
+      try {
+        const parsed = JSON.parse(currentPlaylist);
+        setPlaylist(parsed.videos || []);
+        setCurrentPlaylistName(parsed.name || "");
+      } catch (e) {
+        console.error('Failed to load current playlist:', e);
+      }
+    }
+  }, []);
+
+  // Auto-save current playlist to localStorage
+  useEffect(() => {
+    const currentPlaylist = {
+      name: currentPlaylistName,
+      videos: playlist
+    };
+    localStorage.setItem('playlist-creator-current', JSON.stringify(currentPlaylist));
+  }, [playlist, currentPlaylistName]);
 
   // Enhanced URL parser that detects direct video files and various platforms
   const getEmbedUrl = (url: string): string => {
@@ -112,30 +287,22 @@ export default function PlaylistCreator() {
       const title = document.title;
       const appUrl = '${window.location.origin}';
       
-      // Try to find and focus existing playlist window
-      const existingWindows = [];
       try {
-        // Store reference in sessionStorage for window detection
         const windowId = 'playlist_' + Date.now();
         const videoData = {url: currentUrl, title: title, timestamp: Date.now(), windowId: windowId};
         
-        // Use localStorage to broadcast to all open windows
         localStorage.setItem('newVideoRequest', JSON.stringify(videoData));
-        localStorage.removeItem('newVideoRequest'); // Trigger storage event
+        localStorage.removeItem('newVideoRequest');
         
-        // Check if any window responded within 1 second
-        setTimeout(() => {
+        setTimeout(function() {
           const response = localStorage.getItem('windowResponse_' + windowId);
           if (!response) {
-            // No existing window responded, open new one
             window.open(appUrl + '?video=' + encodeURIComponent(currentUrl) + '&title=' + encodeURIComponent(title), '_blank');
           }
-          // Clean up
           localStorage.removeItem('windowResponse_' + windowId);
         }, 1000);
         
       } catch(e) {
-        // Fallback: just open new window
         window.open(appUrl + '?video=' + encodeURIComponent(currentUrl) + '&title=' + encodeURIComponent(title), '_blank');
       }
     })();`;
@@ -144,7 +311,6 @@ export default function PlaylistCreator() {
 
   // Multi-window coordination and bookmarklet handling
   useEffect(() => {
-    // Generate unique window ID for this instance
     const windowId = 'window_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
     
     // Check for URL parameters (direct video add)
@@ -153,7 +319,7 @@ export default function PlaylistCreator() {
     const videoTitle = urlParams.get('title');
     
     if (videoUrl) {
-      addVideo(videoUrl);
+      resolveAndAdd(videoUrl, videoTitle || undefined);
       toast.success(`Added "${videoTitle || 'Video'}" from bookmarklet`);
       // Clean up URL
       window.history.replaceState({}, document.title, window.location.pathname);
@@ -164,18 +330,15 @@ export default function PlaylistCreator() {
       if (e.key === 'newVideoRequest' && e.newValue) {
         try {
           const data = JSON.parse(e.newValue);
-          // Respond that this window exists and can handle the request
           localStorage.setItem('windowResponse_' + data.windowId, windowId);
           
-          // Ask user if they want to add the video to this window
           const shouldAdd = window.confirm(
             `Add "${data.title}" to this playlist?\n\nURL: ${data.url}`
           );
           
           if (shouldAdd) {
-              resolveAndAdd(videoUrl, videoTitle || undefined);
+            resolveAndAdd(data.url, data.title);
             toast.success(`Added "${data.title}" from bookmarklet`);
-            // Focus this window
             window.focus();
           }
         } catch (e) {
@@ -184,97 +347,77 @@ export default function PlaylistCreator() {
       }
     };
     
-    // Also check localStorage on mount for missed requests
-    const checkMissedRequests = () => {
-      try {
-        const keys = Object.keys(localStorage);
-        const requestKeys = keys.filter(key => key.startsWith('newVideoRequest_'));
-        
-        requestKeys.forEach(key => {
-          const data = JSON.parse(localStorage.getItem(key) || '{}');
-          if (Date.now() - data.timestamp < 5000) { // Within last 5 seconds
-            localStorage.setItem('windowResponse_' + data.windowId, windowId);
-            const shouldAdd = window.confirm(
-              `Add "${data.title}" to this playlist?\n\nURL: ${data.url}`
-            );
-            
-            if (shouldAdd) {
-                resolveAndAdd(data.url, data.title);
-              toast.success(`Added "${data.title}" from bookmarklet`);
-            }
-          }
-          localStorage.removeItem(key);
-        });
-      } catch (e) {
-        console.error('Error checking missed requests:', e);
-      }
-    };
-    
     window.addEventListener('storage', handleStorageEvent);
-    checkMissedRequests();
     
-    // Cleanup
     return () => {
       window.removeEventListener('storage', handleStorageEvent);
     };
   }, []);
 
-    const [searchQuery, setSearchQuery] = useState("");
-    const [searchResults, setSearchResults] = useState<any[]>([]);
+  // YouTube Search  
+  async function searchYouTube(query: string) {
+    if (!query.trim()) return;
+    
+    setIsSearching(true);
+    try {
+      const { searchYouTube: searchYouTubeAPI } = await import('../lib/video-resolver');
+      const result = await searchYouTubeAPI(query);
+      
+      if (result.ok && result.results) {
+        setSearchResults(result.results);
+      } else {
+        toast.error(result.error || "Search failed");
+        setSearchResults([]);
+      }
+    } catch (error) {
+      toast.error("Search failed");
+      setSearchResults([]);
+    } finally {
+      setIsSearching(false);
+    }
+  }
 
-        async function searchYouTube(query: string) {
-            if (!query.trim()) return;
-            const res = await fetch(`/api/search/youtube?q=${encodeURIComponent(query)}`);
-            const data = await res.json();
-            if (data.ok) setSearchResults(data.results);
-            else toast.error(data.error || "Search failed");
-        }
-           
-  const addVideo = (url: string) => {
+  // Resolve video metadata and add to playlist
+  async function resolveAndAdd(url: string, overrideTitle?: string) {
     if (!url.trim()) return;
 
-    const videoItem: VideoItem = {
-      id: Date.now().toString(),
-      url: url.trim(),
-      title: `Video ${playlist.length + 1}`
-    };
+    try {
+      const { resolveVideoUrl } = await import('../lib/video-resolver');
+      const result = await resolveVideoUrl(url);
 
-    setPlaylist(prev => [...prev, videoItem]);
-    toast.success("Video added to playlist");
+      if (!result.ok) {
+        toast.error(result.error || "Could not resolve media");
+        return;
+      }
+
+      const usableUrl = result.embed?.url || result.media?.[0] || url;
+
+      const videoItem: VideoItem = {
+        id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+        url: usableUrl,
+        title: overrideTitle || result.title || `Video ${playlist.length + 1}`,
+        thumbnail: result.thumbnail || undefined,
+      };
+
+      setPlaylist(prev => [...prev, videoItem]);
+      toast.success(`Added "${videoItem.title}" to playlist`);
+    } catch (err: any) {
+      // Fallback: add without metadata
+      const videoItem: VideoItem = {
+        id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+        url: url,
+        title: overrideTitle || `Video ${playlist.length + 1}`,
+      };
+      
+      setPlaylist(prev => [...prev, videoItem]);
+      toast.success(`Added "${videoItem.title}" to playlist`);
+    }
+  }
+
+  const addVideo = (url: string) => {
+    resolveAndAdd(url);
   };
 
-    async function resolveAndAdd(url: string, overrideTitle?: string) {
-      if (!url.trim()) return;
-
-      try {
-        const res = await fetch(`/api/resolve?url=${encodeURIComponent(url)}`);
-        const data = await res.json();
-
-        if (!data.ok) {
-          toast.error(data.error || "Could not resolve media");
-          return;
-        }
-
-        const usableUrl = data.embed?.url || data.media?.[0];
-        if (!usableUrl) {
-          toast.error("No playable media returned");
-          return;
-        }
-
-        const videoItem: VideoItem = {
-          id: Date.now().toString(),
-          url: usableUrl,
-          title: overrideTitle || data.title || `Video ${playlist.length + 1}`,
-          thumbnail: data.thumbnail || undefined,
-        };
-
-        setPlaylist(prev => [...prev, videoItem]);
-        toast.success(`Added "${videoItem.title}" to playlist`);
-      } catch (err: any) {
-        toast.error(err.message || "Resolver error");
-      }
-    }
-    
   const addBulkVideos = () => {
     const urls = bulkUrls
       .split('\n')
@@ -286,15 +429,13 @@ export default function PlaylistCreator() {
       return;
     }
 
-    const newVideos: VideoItem[] = urls.map((url, index) => ({
-      id: (Date.now() + index).toString(),
-      url,
-      title: `Video ${playlist.length + index + 1}`
-    }));
+    // Process URLs one by one to get metadata
+    urls.forEach((url, index) => {
+      setTimeout(() => resolveAndAdd(url), index * 500); // Stagger requests
+    });
 
-    setPlaylist(prev => [...prev, ...newVideos]);
     setBulkUrls("");
-    toast.success(`Added ${urls.length} videos to playlist`);
+    toast.success(`Adding ${urls.length} videos to playlist...`);
   };
 
   const removeVideo = (id: string) => {
@@ -310,21 +451,28 @@ export default function PlaylistCreator() {
     toast.success("Video removed from playlist");
   };
 
-  const moveVideo = (fromIndex: number, toIndex: number) => {
-    const newPlaylist = [...playlist];
-    const [movedVideo] = newPlaylist.splice(fromIndex, 1);
-    newPlaylist.splice(toIndex, 0, movedVideo);
-    setPlaylist(newPlaylist);
+  // Handle drag end for reordering
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
 
-    // Update current video index if needed
-    if (fromIndex === currentVideoIndex) {
-      setCurrentVideoIndex(toIndex);
-    } else if (fromIndex < currentVideoIndex && toIndex >= currentVideoIndex) {
-      setCurrentVideoIndex(currentVideoIndex - 1);
-    } else if (fromIndex > currentVideoIndex && toIndex <= currentVideoIndex) {
-      setCurrentVideoIndex(currentVideoIndex + 1);
+    if (active.id !== over?.id) {
+      setPlaylist((items) => {
+        const oldIndex = items.findIndex(item => item.id === active.id);
+        const newIndex = items.findIndex(item => item.id === over?.id);
+        
+        // Update current video index if needed
+        if (oldIndex === currentVideoIndex) {
+          setCurrentVideoIndex(newIndex);
+        } else if (oldIndex < currentVideoIndex && newIndex >= currentVideoIndex) {
+          setCurrentVideoIndex(currentVideoIndex - 1);
+        } else if (oldIndex > currentVideoIndex && newIndex <= currentVideoIndex) {
+          setCurrentVideoIndex(currentVideoIndex + 1);
+        }
+        
+        return arrayMove(items, oldIndex, newIndex);
+      });
     }
-  };
+  }
 
   const playVideo = (index: number) => {
     setCurrentVideoIndex(index);
@@ -349,44 +497,87 @@ export default function PlaylistCreator() {
 
   const togglePlayPause = () => {
     setIsPlaying(!isPlaying);
-    // Note: This only updates UI state. Iframe videos cannot be controlled externally due to security restrictions.
   };
 
-  // Browser functionality
-    const addCurrentBrowserUrl = () => {
-      if (browserUrl) {
-        resolveAndAdd(browserUrl);
-      }
+  // Playlist Management Functions
+  const savePlaylist = () => {
+    if (!currentPlaylistName.trim()) {
+      toast.error("Please enter a playlist name");
+      return;
+    }
+
+    const newPlaylist: SavedPlaylist = {
+      id: Date.now().toString(),
+      name: currentPlaylistName,
+      videos: [...playlist],
+      created: new Date().toISOString(),
+      modified: new Date().toISOString()
     };
 
-  const navigateBrowser = (url: string) => {
-    // Add https:// prefix if no protocol is specified
-    let formattedUrl = url.trim();
-    if (formattedUrl && !formattedUrl.match(/^https?:\/\//)) {
-      formattedUrl = `https://${formattedUrl}`;
-    }
-    setBrowserUrl(formattedUrl);
+    const updatedPlaylists = [...savedPlaylists, newPlaylist];
+    setSavedPlaylists(updatedPlaylists);
+    localStorage.setItem('playlist-creator-playlists', JSON.stringify(updatedPlaylists));
+    toast.success(`Playlist "${currentPlaylistName}" saved`);
   };
 
-  const currentVideo = playlist[currentVideoIndex];
+  const loadPlaylist = (playlistId: string) => {
+    const playlist = savedPlaylists.find(p => p.id === playlistId);
+    if (playlist) {
+      setPlaylist(playlist.videos);
+      setCurrentPlaylistName(playlist.name);
+      setCurrentVideoIndex(0);
+      toast.success(`Loaded playlist "${playlist.name}"`);
+    }
+  };
 
-  // Export playlist functionality
+  const deletePlaylist = (playlistId: string) => {
+    const updatedPlaylists = savedPlaylists.filter(p => p.id !== playlistId);
+    setSavedPlaylists(updatedPlaylists);
+    localStorage.setItem('playlist-creator-playlists', JSON.stringify(updatedPlaylists));
+    toast.success("Playlist deleted");
+  };
+
+  // Export Functions
   const exportPlaylistAsText = () => {
     const playlistText = playlist.map((video, index) => 
       `${index + 1}. ${video.title}\n   ${video.url}`
     ).join('\n\n');
     
-    const blob = new Blob([playlistText], { type: 'text/plain' });
+    downloadFile(playlistText, `playlist-${new Date().toISOString().split('T')[0]}.txt`, 'text/plain');
+    toast.success("Playlist exported as text file");
+  };
+
+  const exportPlaylistAsJSON = () => {
+    const playlistData = {
+      name: currentPlaylistName || 'Untitled Playlist',
+      created: new Date().toISOString(),
+      videos: playlist
+    };
+    
+    downloadFile(JSON.stringify(playlistData, null, 2), `playlist-${new Date().toISOString().split('T')[0]}.json`, 'application/json');
+    toast.success("Playlist exported as JSON file");
+  };
+
+  const exportPlaylistAsM3U8 = () => {
+    let m3u8Content = '#EXTM3U\n';
+    playlist.forEach(video => {
+      m3u8Content += `#EXTINF:-1,${video.title}\n${video.url}\n`;
+    });
+    
+    downloadFile(m3u8Content, `playlist-${new Date().toISOString().split('T')[0]}.m3u8`, 'application/vnd.apple.mpegurl');
+    toast.success("Playlist exported as M3U8 file");
+  };
+
+  const downloadFile = (content: string, filename: string, type: string) => {
+    const blob = new Blob([content], { type });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `playlist-${new Date().toISOString().split('T')[0]}.txt`;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    
-    toast.success("Playlist exported as text file");
   };
 
   const copyPlaylistToClipboard = async () => {
@@ -407,35 +598,80 @@ export default function PlaylistCreator() {
     const reader = new FileReader();
     reader.onload = (e) => {
       const content = e.target?.result as string;
-      const urls = content
-        .split('\n')
-        .map(line => line.trim())
-        .filter(line => line.length > 0 && (line.startsWith('http') || line.includes('.')))
-        .map(line => {
-          // Extract URL if line contains title format "1. Title\n   URL"
-          const urlMatch = line.match(/https?:\/\/[^\s]+/) || line.match(/[^\s]+\.[a-z]{2,}/);
-          return urlMatch ? urlMatch[0] : line;
-        })
-        .filter(url => url.length > 0);
+      
+      try {
+        // Try to parse as JSON first
+        if (file.name.endsWith('.json')) {
+          const jsonData = JSON.parse(content);
+          if (jsonData.videos && Array.isArray(jsonData.videos)) {
+            setPlaylist(prev => [...prev, ...jsonData.videos]);
+            if (jsonData.name) setCurrentPlaylistName(jsonData.name);
+            toast.success(`Imported ${jsonData.videos.length} videos from JSON`);
+            return;
+          }
+        }
+      } catch (e) {
+        // Fall through to text parsing
+      }
 
-      if (urls.length === 0) {
+      // Parse as text/M3U8
+      const lines = content.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+      const newVideos: VideoItem[] = [];
+      
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        
+        if (line.startsWith('#EXTINF:')) {
+          // M3U8 format
+          const title = line.split(',')[1] || `Video ${newVideos.length + 1}`;
+          const url = lines[i + 1];
+          if (url && !url.startsWith('#')) {
+            newVideos.push({
+              id: (Date.now() + newVideos.length).toString(),
+              url,
+              title
+            });
+            i++; // Skip next line as it's the URL
+          }
+        } else if (line.startsWith('http') || line.includes('.')) {
+          // Plain URL
+          newVideos.push({
+            id: (Date.now() + newVideos.length).toString(),
+            url: line,
+            title: `Video ${newVideos.length + 1}`
+          });
+        }
+      }
+
+      if (newVideos.length === 0) {
         toast.error("No valid URLs found in file");
         return;
       }
 
-      const newVideos: VideoItem[] = urls.map((url, index) => ({
-        id: (Date.now() + index).toString(),
-        url,
-        title: `Video ${playlist.length + index + 1}`
-      }));
-
       setPlaylist(prev => [...prev, ...newVideos]);
-      toast.success(`Imported ${urls.length} videos from file`);
+      toast.success(`Imported ${newVideos.length} videos from file`);
     };
 
     reader.readAsText(file);
     event.target.value = ''; // Reset file input
   };
+
+  // Browser functionality
+  const addCurrentBrowserUrl = () => {
+    if (browserUrl) {
+      resolveAndAdd(browserUrl);
+    }
+  };
+
+  const navigateBrowser = (url: string) => {
+    let formattedUrl = url.trim();
+    if (formattedUrl && !formattedUrl.match(/^https?:\/\//)) {
+      formattedUrl = `https://${formattedUrl}`;
+    }
+    setBrowserUrl(formattedUrl);
+  };
+
+  const currentVideo = playlist[currentVideoIndex];
 
   // Listen for iframe messages to detect video end
   useEffect(() => {
@@ -445,7 +681,6 @@ export default function PlaylistCreator() {
         try {
           const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
           if (data.event === 'video-progress' && data.info?.playerState === 0) {
-            // Video ended (playerState 0 = ended)
             nextVideo();
           }
         } catch (e) {
@@ -465,12 +700,11 @@ export default function PlaylistCreator() {
         }
       }
 
-      // XPlayer iframe API messages
+      // Generic video end events
       if (event.data && typeof event.data === 'object') {
         if (event.data.type === 'xplayer_event' && event.data.event === 'ended') {
           nextVideo();
         }
-        // Also check for generic video end events
         if (event.data.event === 'video_ended' || event.data.type === 'video_ended') {
           nextVideo();
         }
@@ -481,7 +715,7 @@ export default function PlaylistCreator() {
     return () => window.removeEventListener('message', handleMessage);
   }, [currentVideoIndex, playlist.length]);
 
-  // Update iframe src when video changes to enable proper event listening
+  // Update iframe src when video changes
   useEffect(() => {
     if (currentVideo && playerRef.current) {
       const embedUrl = getEmbedUrl(currentVideo.url);
@@ -500,34 +734,19 @@ export default function PlaylistCreator() {
         {currentVideo ? (
           <div className="space-y-4">
             <div className="aspect-video bg-muted rounded-lg overflow-hidden">
-              {/* Check if it's a direct video file */}
-              {['.mp4', '.webm', '.ogg', '.mov', '.avi', '.mkv', '.m4v'].some(ext => 
-                currentVideo.url.toLowerCase().includes(ext)
-              ) ? (
-                <video
-                  controls
-                  autoPlay
-                  className="w-full h-full"
-                  onEnded={nextVideo}
-                >
-                  <source src={currentVideo.url} type="video/mp4" />
-                  Your browser does not support the video tag.
-                </video>
-              ) : (
-                <iframe
-                  ref={playerRef}
-                  src={getEmbedUrl(currentVideo.url)}
-                  className="w-full h-full"
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                  allowFullScreen
-                  title={currentVideo.title}
-                />
-              )}
+              <iframe
+                ref={playerRef}
+                src={getEmbedUrl(currentVideo.url)}
+                className="w-full h-full"
+                title={currentVideo.title}
+                allow="autoplay; encrypted-media; picture-in-picture"
+                allowFullScreen
+              />
             </div>
             
             <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-semibold">{currentVideo.title}</h3>
+              <div className="flex-1 min-w-0">
+                <h3 className="font-semibold truncate">{currentVideo.title}</h3>
                 <p className="text-sm text-muted-foreground">
                   Video {currentVideoIndex + 1} of {playlist.length}
                 </p>
@@ -552,61 +771,125 @@ export default function PlaylistCreator() {
           </div>
         )}
       </Card>
+
+      {/* Playlist Management */}
+      <Card className="p-6">
+        <h2 className="text-2xl font-bold mb-4">Playlist Management</h2>
+        
+        <div className="space-y-4">
+          <div className="flex space-x-2">
+            <Input
+              placeholder="Enter playlist name"
+              value={currentPlaylistName}
+              onChange={(e) => setCurrentPlaylistName(e.target.value)}
+            />
+            <Button onClick={savePlaylist} disabled={!currentPlaylistName.trim() || playlist.length === 0}>
+              <Save className="h-4 w-4 mr-2" />
+              Save Playlist
+            </Button>
+          </div>
           
+          {savedPlaylists.length > 0 && (
+            <div className="flex space-x-2">
+              <Select value={selectedPlaylistId} onValueChange={setSelectedPlaylistId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select saved playlist" />
+                </SelectTrigger>
+                <SelectContent>
+                  {savedPlaylists.map(playlist => (
+                    <SelectItem key={playlist.id} value={playlist.id}>
+                      {playlist.name} ({playlist.videos.length} videos)
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button 
+                onClick={() => loadPlaylist(selectedPlaylistId)} 
+                disabled={!selectedPlaylistId}
+              >
+                <FolderOpen className="h-4 w-4 mr-2" />
+                Load
+              </Button>
+              <Button 
+                variant="outline" 
+                onClick={() => deletePlaylist(selectedPlaylistId)} 
+                disabled={!selectedPlaylistId}
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete
+              </Button>
+            </div>
+          )}
+        </div>
+      </Card>
+
       {/* Add Videos Section */}
       <Card className="p-6">
-          {//Search Bar for Youtube}
-          <div className="space-y-2">
+        <h2 className="text-2xl font-bold mb-4">Add Videos</h2>
+        
+        <div className="space-y-6">
+          {/* YouTube Search */}
+          <div className="space-y-4">
+            <h3 className="text-lg font-semibold">Search YouTube</h3>
             <div className="flex space-x-2">
               <Input
-                placeholder="Search YouTube videos"
+                placeholder="Search YouTube videos..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyPress={(e) => {
                   if (e.key === "Enter") searchYouTube(searchQuery);
                 }}
               />
-              <Button onClick={() => searchYouTube(searchQuery)}>Search</Button>
+              <Button onClick={() => searchYouTube(searchQuery)} disabled={isSearching}>
+                <Search className="h-4 w-4 mr-2" />
+                {isSearching ? "Searching..." : "Search"}
+              </Button>
             </div>
-        <h2 className="text-2xl font-bold mb-4">Add Videos</h2>
-              {//Search Results}
+            
             {searchResults.length > 0 && (
-              <div className="grid grid-cols-2 gap-2">
-                {searchResults.map((r) => (
-                  <div key={r.id} className="border rounded p-2 flex flex-col">
-                    <img src={r.thumbnail} alt={r.title} className="rounded mb-2" />
-                    <p className="text-sm truncate">{r.title}</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {searchResults.map((result) => (
+                  <div key={result.id} className="border rounded-lg p-3 space-y-2">
+                    <img 
+                      src={result.thumbnail} 
+                      alt={result.title} 
+                      className="w-full aspect-video object-cover rounded"
+                    />
+                    <h4 className="font-medium text-sm line-clamp-2">{result.title}</h4>
                     <Button
-                      variant="outline"
                       size="sm"
-                      onClick={() => resolveAndAdd(r.url, r.title)}
+                      onClick={() => resolveAndAdd(result.url, result.title)}
+                      className="w-full"
                     >
-                      Add
+                      Add to Playlist
                     </Button>
                   </div>
                 ))}
               </div>
             )}
           </div>
-        <div className="space-y-4">
+
           {/* Single URL Input */}
-          <div className="flex space-x-2">
-            <Input
-              type="url"
-              placeholder="Enter video URL (YouTube, Vimeo, direct .mp4, Instagram, TikTok...)"
-              value={newUrl}
-              onChange={(e) => setNewUrl(e.target.value)}
-              onKeyPress={(e) => {
-                if (e.key === 'Enter') {
-                    resolveAndAdd(data.url, data.title);
-                  setNewUrl("");
-                }
-              }}
-            />
-                <Button onClick={() => { resolveAndAdd(newUrl); setNewUrl(""); }}>
-              <Plus className="h-4 w-4 mr-2" />
-              Add
-            </Button>
+          <div className="space-y-2">
+            <h3 className="text-lg font-semibold">Add Single Video</h3>
+            <div className="flex space-x-2">
+              <Input
+                type="url"
+                placeholder="Enter video URL (YouTube, Vimeo, direct .mp4, Instagram, TikTok...)"
+                value={newUrl}
+                onChange={(e) => setNewUrl(e.target.value)}
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter') {
+                    resolveAndAdd(newUrl);
+                    setNewUrl("");
+                  }
+                }}
+              />
+              <Button onClick={() => { resolveAndAdd(newUrl); setNewUrl(""); }}>
+                <Plus className="h-4 w-4 mr-2" />
+                Add
+              </Button>
+            </div>
           </div>
 
           {/* Bookmarklet Generator */}
@@ -636,13 +919,11 @@ export default function PlaylistCreator() {
                 Add to Playlist
               </a>
             </div>
-            <p className="text-xs text-muted-foreground mt-2">
-              Note: Web Views are only available in mobile apps. In browsers, we're limited by X-Frame-Options security restrictions.
-            </p>
           </div>
           
+          {/* Bulk Add */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">Bulk Add (one URL per line)</label>
+            <h3 className="text-lg font-semibold">Bulk Add Videos</h3>
             <Textarea
               placeholder="https://youtube.com/watch?v=...&#10;https://vimeo.com/...&#10;https://instagram.com/..."
               value={bulkUrls}
@@ -651,12 +932,13 @@ export default function PlaylistCreator() {
             />
             <div className="flex space-x-2">
               <Button onClick={addBulkVideos} disabled={!bulkUrls.trim()}>
+                <Plus className="h-4 w-4 mr-2" />
                 Add All Videos
               </Button>
               <div className="relative">
                 <input
                   type="file"
-                  accept=".txt,.m3u,.m3u8"
+                  accept=".txt,.json,.m3u,.m3u8"
                   onChange={importPlaylistFromFile}
                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                   id="playlist-upload"
@@ -729,10 +1011,10 @@ export default function PlaylistCreator() {
         )}
       </Card>
 
-      {/* Playlist Management */}
+      {/* Current Playlist */}
       <Card className="p-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-2xl font-bold">Playlist ({playlist.length} videos)</h2>
+          <h2 className="text-2xl font-bold">Current Playlist ({playlist.length} videos)</h2>
           
           {playlist.length > 0 && (
             <div className="flex items-center space-x-2">
@@ -742,7 +1024,15 @@ export default function PlaylistCreator() {
               </Button>
               <Button variant="outline" size="sm" onClick={exportPlaylistAsText}>
                 <Download className="h-4 w-4 mr-2" />
-                Export Playlist
+                Export TXT
+              </Button>
+              <Button variant="outline" size="sm" onClick={exportPlaylistAsJSON}>
+                <Download className="h-4 w-4 mr-2" />
+                Export JSON
+              </Button>
+              <Button variant="outline" size="sm" onClick={exportPlaylistAsM3U8}>
+                <Download className="h-4 w-4 mr-2" />
+                Export M3U8
               </Button>
             </div>
           )}
@@ -753,43 +1043,29 @@ export default function PlaylistCreator() {
             Your playlist is empty. Add some videos above to get started.
           </p>
         ) : (
-          <div className="space-y-2">
-            {playlist.map((video, index) => (
-              <div
-                key={video.id}
-                className={`flex items-center space-x-3 p-3 rounded-lg border ${
-                  index === currentVideoIndex ? 'bg-primary/10 border-primary' : 'bg-background'
-                }`}
-              >
-                <div className="cursor-grab">
-                  <GripVertical className="h-4 w-4 text-muted-foreground" />
-                </div>
-                
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium truncate">{video.title}</p>
-                  <p className="text-sm text-muted-foreground truncate">{video.url}</p>
-                </div>
-                
-                <div className="flex items-center space-x-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => playVideo(index)}
-                    disabled={index === currentVideoIndex}
-                  >
-                    <Play className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => removeVideo(video.id)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
+          <DndContext 
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext 
+              items={playlist.map(video => video.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              <div className="space-y-2">
+                {playlist.map((video, index) => (
+                  <SortableVideoItem
+                    key={video.id}
+                    video={video}
+                    index={index}
+                    currentVideoIndex={currentVideoIndex}
+                    onPlay={playVideo}
+                    onRemove={removeVideo}
+                  />
+                ))}
               </div>
-            ))}
-          </div>
+            </SortableContext>
+          </DndContext>
         )}
       </Card>
     </section>
