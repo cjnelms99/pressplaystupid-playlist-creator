@@ -10,7 +10,7 @@ const Index = () => {
 
       <header className="container mx-auto py-14 text-center">
         <h1 className="text-4xl font-bold tracking-tight md:text-5xl">
-          <span>Video Playlist Creator</span>
+          <span>PressPlayStupid : Video Playlist Creator</span>
         </h1>
         <p className="mt-3 text-muted-foreground max-w-2xl mx-auto text-xl">Create playlists from input video URLs and watch them sequentially. Export/Import supported.
 Or, browse in-app and add videos as you go.
