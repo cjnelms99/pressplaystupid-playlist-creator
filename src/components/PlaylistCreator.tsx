@@ -219,6 +219,17 @@ export default function PlaylistCreator() {
     };
   }, []);
 
+    const [searchQuery, setSearchQuery] = useState("");
+    const [searchResults, setSearchResults] = useState<any[]>([]);
+
+        async function searchYouTube(query: string) {
+            if (!query.trim()) return;
+            const res = await fetch(`/api/search/youtube?q=${encodeURIComponent(query)}`);
+            const data = await res.json();
+            if (data.ok) setSearchResults(data.results);
+            else toast.error(data.error || "Search failed");
+        }
+           
   const addVideo = (url: string) => {
     if (!url.trim()) return;
 
@@ -541,11 +552,42 @@ export default function PlaylistCreator() {
           </div>
         )}
       </Card>
-
-      {/* Add Videos */}
+          
+      {/* Add Videos Section */}
       <Card className="p-6">
+          {//Search Bar for Youtube}
+          <div className="space-y-2">
+            <div className="flex space-x-2">
+              <Input
+                placeholder="Search YouTube videos"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyPress={(e) => {
+                  if (e.key === "Enter") searchYouTube(searchQuery);
+                }}
+              />
+              <Button onClick={() => searchYouTube(searchQuery)}>Search</Button>
+            </div>
         <h2 className="text-2xl font-bold mb-4">Add Videos</h2>
-        
+              {//Search Results}
+            {searchResults.length > 0 && (
+              <div className="grid grid-cols-2 gap-2">
+                {searchResults.map((r) => (
+                  <div key={r.id} className="border rounded p-2 flex flex-col">
+                    <img src={r.thumbnail} alt={r.title} className="rounded mb-2" />
+                    <p className="text-sm truncate">{r.title}</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => resolveAndAdd(r.url, r.title)}
+                    >
+                      Add
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         <div className="space-y-4">
           {/* Single URL Input */}
           <div className="flex space-x-2">
