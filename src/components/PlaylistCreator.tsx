@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,7 +21,10 @@ import {
   EyeOff,
   Save,
   FolderOpen,
-  Search
+  Search,
+  Layout,
+  PictureInPicture,
+  X
 } from "lucide-react";
 
 import {
@@ -90,46 +93,48 @@ function SortableVideoItem({
     <div
       ref={setNodeRef}
       style={style}
-      className={`flex items-center space-x-3 p-3 rounded-lg border ${
-        index === currentVideoIndex ? 'bg-primary/10 border-primary' : 'bg-background'
+      className={`flex items-center space-x-2 p-2 rounded border text-sm ${
+        index === currentVideoIndex ? 'bg-primary/10 border-primary' : 'bg-background hover:bg-muted/50'
       }`}
     >
       <div 
-        className="cursor-grab active:cursor-grabbing"
+        className="cursor-grab active:cursor-grabbing flex-shrink-0"
         {...attributes} 
         {...listeners}
       >
-        <GripVertical className="h-4 w-4 text-muted-foreground" />
+        <GripVertical className="h-3 w-3 text-muted-foreground" />
       </div>
       
       {video.thumbnail && (
         <img 
           src={video.thumbnail} 
           alt={video.title} 
-          className="w-16 h-12 object-cover rounded flex-shrink-0"
+          className="w-12 h-8 object-cover rounded flex-shrink-0"
         />
       )}
       
       <div className="flex-1 min-w-0">
-        <p className="font-medium truncate">{video.title}</p>
-        <p className="text-sm text-muted-foreground truncate">{video.url}</p>
+        <p className="font-medium truncate text-xs">{video.title}</p>
+        <p className="text-xs text-muted-foreground truncate">{new URL(video.url).hostname}</p>
       </div>
       
-      <div className="flex items-center space-x-2">
+      <div className="flex items-center space-x-1 flex-shrink-0">
         <Button
           variant="outline"
           size="sm"
           onClick={() => onPlay(index)}
           disabled={index === currentVideoIndex}
+          className="h-6 w-6 p-0"
         >
-          <Play className="h-4 w-4" />
+          <Play className="h-3 w-3" />
         </Button>
         <Button
           variant="outline"
           size="sm"
           onClick={() => onRemove(video.id)}
+          className="h-6 w-6 p-0"
         >
-          <Trash2 className="h-4 w-4" />
+          <Trash2 className="h-3 w-3" />
         </Button>
       </div>
     </div>
@@ -145,6 +150,11 @@ export default function PlaylistCreator() {
   const [showBrowser, setShowBrowser] = useState(false);
   const [browserUrl, setBrowserUrl] = useState("https://www.example.com");
   
+  // Layout and PiP settings
+  const [layout, setLayout] = useState<'left' | 'right' | 'top' | 'compact'>('left');
+  const [isPiPMode, setIsPiPMode] = useState(false);
+  const [isVideoInView, setIsVideoInView] = useState(true);
+  
   // YouTube Search
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<any[]>([]);
@@ -157,6 +167,10 @@ export default function PlaylistCreator() {
   
   const playerRef = useRef<HTMLIFrameElement>(null);
   const browserRef = useRef<HTMLIFrameElement>(null);
+  const videoSectionRef = useRef<HTMLDivElement>(null);
+
+  // Current video reference
+  const currentVideo = playlist[currentVideoIndex];
 
   // Drag and drop sensors
   const sensors = useSensors(
@@ -499,6 +513,37 @@ export default function PlaylistCreator() {
     setIsPlaying(!isPlaying);
   };
 
+  // Picture-in-Picture functionality
+  const togglePiP = useCallback(() => {
+    setIsPiPMode(!isPiPMode);
+  }, [isPiPMode]);
+
+  // Clear playlist functionality
+  const clearPlaylist = () => {
+    setPlaylist([]);
+    setCurrentVideoIndex(0);
+    setCurrentPlaylistName("");
+    toast.success("Playlist cleared");
+  };
+
+  // Scroll detection for auto PiP
+  useEffect(() => {
+    const handleScroll = () => {
+      if (videoSectionRef.current) {
+        const rect = videoSectionRef.current.getBoundingClientRect();
+        const isMoreThanHalfwayOffScreen = rect.bottom < window.innerHeight / 2;
+        setIsVideoInView(rect.top < window.innerHeight && rect.bottom > 0);
+        
+        if (isMoreThanHalfwayOffScreen && !isPiPMode && currentVideo) {
+          setIsPiPMode(true);
+        }
+      }
+    };
+
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [isPiPMode, currentVideo]);
+
   // Playlist Management Functions
   const savePlaylist = () => {
     if (!currentPlaylistName.trim()) {
@@ -590,7 +635,7 @@ export default function PlaylistCreator() {
     }
   };
 
-  // Import playlist functionality
+  // Import playlist functionality - Fixed to parse URLs only
   const importPlaylistFromFile = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -604,9 +649,14 @@ export default function PlaylistCreator() {
         if (file.name.endsWith('.json')) {
           const jsonData = JSON.parse(content);
           if (jsonData.videos && Array.isArray(jsonData.videos)) {
-            setPlaylist(prev => [...prev, ...jsonData.videos]);
+            // Process each video to resolve metadata
+            jsonData.videos.forEach((video: any, index: number) => {
+              if (video.url) {
+                setTimeout(() => resolveAndAdd(video.url, video.title), index * 200);
+              }
+            });
             if (jsonData.name) setCurrentPlaylistName(jsonData.name);
-            toast.success(`Imported ${jsonData.videos.length} videos from JSON`);
+            toast.success(`Processing ${jsonData.videos.length} videos from JSON...`);
             return;
           }
         }
@@ -614,46 +664,57 @@ export default function PlaylistCreator() {
         // Fall through to text parsing
       }
 
-      // Parse as text/M3U8
-      const lines = content.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-      const newVideos: VideoItem[] = [];
+      // Parse as text/M3U8 - Extract URLs only and resolve metadata
+      const lines = content.split('\n').map(line => line.trim());
+      const urls = [];
       
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         
         if (line.startsWith('#EXTINF:')) {
-          // M3U8 format
-          const title = line.split(',')[1] || `Video ${newVideos.length + 1}`;
+          // M3U8 format - get URL from next line
           const url = lines[i + 1];
-          if (url && !url.startsWith('#')) {
-            newVideos.push({
-              id: (Date.now() + newVideos.length).toString(),
-              url,
-              title
-            });
+          if (url && !url.startsWith('#') && isValidUrl(url)) {
+            urls.push(url);
             i++; // Skip next line as it's the URL
           }
-        } else if (line.startsWith('http') || line.includes('.')) {
-          // Plain URL
-          newVideos.push({
-            id: (Date.now() + newVideos.length).toString(),
-            url: line,
-            title: `Video ${newVideos.length + 1}`
-          });
+        } else if (isValidUrl(line)) {
+          // Plain URL or mixed content - extract URLs only
+          urls.push(line);
+        } else if (line.includes('http')) {
+          // Extract URLs from lines that contain them
+          const urlMatch = line.match(/(https?:\/\/[^\s]+)/);
+          if (urlMatch) {
+            urls.push(urlMatch[1]);
+          }
         }
       }
 
-      if (newVideos.length === 0) {
+      if (urls.length === 0) {
         toast.error("No valid URLs found in file");
         return;
       }
 
-      setPlaylist(prev => [...prev, ...newVideos]);
-      toast.success(`Imported ${newVideos.length} videos from file`);
+      // Process URLs one by one to get proper metadata
+      urls.forEach((url, index) => {
+        setTimeout(() => resolveAndAdd(url), index * 200);
+      });
+      
+      toast.success(`Processing ${urls.length} videos from file...`);
     };
 
     reader.readAsText(file);
     event.target.value = ''; // Reset file input
+  };
+
+  // Helper function to validate URLs
+  const isValidUrl = (string: string) => {
+    try {
+      new URL(string.startsWith('http') ? string : `https://${string}`);
+      return string.includes('.') || string.includes('http');
+    } catch (_) {
+      return false;
+    }
   };
 
   // Browser functionality
@@ -670,8 +731,6 @@ export default function PlaylistCreator() {
     }
     setBrowserUrl(formattedUrl);
   };
-
-  const currentVideo = playlist[currentVideoIndex];
 
   // Listen for iframe messages to detect video end
   useEffect(() => {
@@ -725,112 +784,354 @@ export default function PlaylistCreator() {
     }
   }, [currentVideoIndex, currentVideo]);
 
-  return (
-    <section className="container mx-auto py-8 space-y-8">
-      {/* Video Player */}
-      <Card className="p-6">
-        <h2 className="text-2xl font-bold mb-4">Video Player</h2>
-        
-        {currentVideo ? (
-          <div className="space-y-4">
-            <div className="aspect-video bg-muted rounded-lg overflow-hidden">
-              <iframe
-                ref={playerRef}
-                src={getEmbedUrl(currentVideo.url)}
-                className="w-full h-full"
-                title={currentVideo.title}
-                allow="autoplay; encrypted-media; picture-in-picture"
-                allowFullScreen
-              />
-            </div>
-            
-            <div className="flex items-center justify-between">
-              <div className="flex-1 min-w-0">
-                <h3 className="font-semibold truncate">{currentVideo.title}</h3>
-                <p className="text-sm text-muted-foreground">
-                  Video {currentVideoIndex + 1} of {playlist.length}
-                </p>
-              </div>
-              
-              <div className="flex items-center space-x-2">
-                <Button variant="outline" size="sm" onClick={previousVideo}>
-                  <SkipBack className="h-4 w-4" />
-                </Button>
-                <Button variant="outline" size="sm" onClick={togglePlayPause}>
-                  {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                </Button>
-                <Button variant="outline" size="sm" onClick={nextVideo}>
-                  <SkipForward className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="aspect-video bg-muted rounded-lg flex items-center justify-center">
-            <p className="text-muted-foreground">Add videos to your playlist to start watching</p>
-          </div>
-        )}
-      </Card>
+  const getLayoutClasses = () => {
+    switch (layout) {
+      case 'right':
+        return 'flex-row-reverse';
+      case 'top':
+        return 'flex-col';
+      case 'compact':
+        return 'flex-col lg:flex-row';
+      default: // 'left'
+        return 'flex-row';
+    }
+  };
 
-      {/* Playlist Management */}
-      <Card className="p-6">
-        <h2 className="text-2xl font-bold mb-4">Playlist Management</h2>
-        
-        <div className="space-y-4">
-          <div className="flex space-x-2">
-            <Input
-              placeholder="Enter playlist name"
-              value={currentPlaylistName}
-              onChange={(e) => setCurrentPlaylistName(e.target.value)}
-            />
-            <Button onClick={savePlaylist} disabled={!currentPlaylistName.trim() || playlist.length === 0}>
-              <Save className="h-4 w-4 mr-2" />
-              Save Playlist
+  return (
+    <div className="relative">
+      {/* Bookmarklet - Top Corner */}
+      <div className="fixed top-4 right-4 z-50">
+        <Card className="p-3 bg-background/95 backdrop-blur-sm border-2">
+          <div className="flex items-center space-x-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                navigator.clipboard.writeText(generateBookmarklet());
+                toast.success("Bookmarklet copied! Create a new bookmark and paste this as the URL.");
+              }}
+            >
+              <Copy className="h-3 w-3 mr-1" />
+              Copy Bookmarklet
+            </Button>
+            <a
+              href={generateBookmarklet()}
+              className="inline-flex items-center px-2 py-1 rounded text-xs bg-primary text-primary-foreground hover:bg-primary/90"
+              draggable="true"
+              onClick={(e) => e.preventDefault()}
+            >
+              Add to Playlist
+            </a>
+          </div>
+        </Card>
+      </div>
+
+      {/* Picture-in-Picture Video */}
+      {isPiPMode && currentVideo && (
+        <div className="fixed bottom-4 right-4 z-40 w-80 bg-background border-2 rounded-lg shadow-2xl">
+          <div className="flex items-center justify-between p-2 border-b">
+            <span className="text-sm font-medium truncate">{currentVideo.title}</span>
+            <Button variant="ghost" size="sm" onClick={() => setIsPiPMode(false)}>
+              <X className="h-4 w-4" />
             </Button>
           </div>
-          
-          {savedPlaylists.length > 0 && (
-            <div className="flex space-x-2">
-              <Select value={selectedPlaylistId} onValueChange={setSelectedPlaylistId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select saved playlist" />
-                </SelectTrigger>
-                <SelectContent>
-                  {savedPlaylists.map(playlist => (
-                    <SelectItem key={playlist.id} value={playlist.id}>
-                      {playlist.name} ({playlist.videos.length} videos)
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button 
-                onClick={() => loadPlaylist(selectedPlaylistId)} 
-                disabled={!selectedPlaylistId}
-              >
-                <FolderOpen className="h-4 w-4 mr-2" />
-                Load
-              </Button>
-              <Button 
-                variant="outline" 
-                onClick={() => deletePlaylist(selectedPlaylistId)} 
-                disabled={!selectedPlaylistId}
-              >
-                <Trash2 className="h-4 w-4 mr-2" />
-                Delete
+          <div className="aspect-video">
+            <iframe
+              src={getEmbedUrl(currentVideo.url)}
+              className="w-full h-full"
+              title={currentVideo.title}
+              allow="autoplay; encrypted-media; picture-in-picture"
+              allowFullScreen
+            />
+          </div>
+          <div className="flex items-center justify-center space-x-2 p-2">
+            <Button variant="outline" size="sm" onClick={previousVideo}>
+              <SkipBack className="h-3 w-3" />
+            </Button>
+            <Button variant="outline" size="sm" onClick={togglePlayPause}>
+              {isPlaying ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
+            </Button>
+            <Button variant="outline" size="sm" onClick={nextVideo}>
+              <SkipForward className="h-3 w-3" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <section className="container mx-auto py-8 space-y-8">
+        {/* Layout Controls */}
+        <Card className="p-4">
+          <div className="flex items-center justify-between">
+            <h1 className="text-2xl font-bold">Video Playlist Creator</h1>
+            <div className="flex items-center space-x-4">
+              <div className="flex items-center space-x-2">
+                <Layout className="h-4 w-4" />
+                <Select value={layout} onValueChange={(value: any) => setLayout(value)}>
+                  <SelectTrigger className="w-32">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="left">Video Left</SelectItem>
+                    <SelectItem value="right">Video Right</SelectItem>
+                    <SelectItem value="top">Video Top</SelectItem>
+                    <SelectItem value="compact">Compact</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button variant="outline" size="sm" onClick={togglePiP}>
+                <PictureInPicture className="h-4 w-4 mr-2" />
+                {isPiPMode ? 'Exit PiP' : 'Picture-in-Picture'}
               </Button>
             </div>
-          )}
-        </div>
-      </Card>
+          </div>
+        </Card>
 
-      {/* Add Videos Section */}
-      <Card className="p-6">
-        <h2 className="text-2xl font-bold mb-4">Add Videos</h2>
-        
-        <div className="space-y-6">
-          {/* YouTube Search */}
+        {/* Main Content Area */}
+        <div className={`flex gap-8 ${getLayoutClasses()} ${layout === 'top' ? '' : 'items-start'}`}>
+          {/* Video Player Section */}
+          <div 
+            ref={videoSectionRef}
+            className={`${layout === 'top' ? 'w-full' : layout === 'compact' ? 'w-full lg:w-[60%]' : 'w-[60%]'} ${isPiPMode ? 'opacity-30' : ''}`}
+          >
+            <Card className="p-6">
+              <h2 className="text-xl font-bold mb-4">Video Player</h2>
+              
+              {currentVideo ? (
+                <div className="space-y-4">
+                  <div className="aspect-video bg-muted rounded-lg overflow-hidden">
+                    <iframe
+                      ref={playerRef}
+                      src={getEmbedUrl(currentVideo.url)}
+                      className="w-full h-full"
+                      title={currentVideo.title}
+                      allow="autoplay; encrypted-media; picture-in-picture"
+                      allowFullScreen
+                    />
+                  </div>
+                  
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1 min-w-0">
+                      <h3 className="font-semibold truncate">{currentVideo.title}</h3>
+                      <p className="text-sm text-muted-foreground">
+                        Video {currentVideoIndex + 1} of {playlist.length}
+                      </p>
+                    </div>
+                    
+                    <div className="flex items-center space-x-2">
+                      <Button variant="outline" size="sm" onClick={previousVideo}>
+                        <SkipBack className="h-4 w-4" />
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={togglePlayPause}>
+                        {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={nextVideo}>
+                        <SkipForward className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="aspect-video bg-muted rounded-lg flex items-center justify-center">
+                  <p className="text-muted-foreground">Add videos to your playlist to start watching</p>
+                </div>
+              )}
+            </Card>
+          </div>
+
+          {/* Sidebar - Playlist Management */}
+          <div className={`${layout === 'top' ? 'w-full' : layout === 'compact' ? 'w-full lg:w-[40%]' : 'w-[40%]'} space-y-6`}>
+            {/* Playlist Management */}
+            <Card className="p-4">
+              <h3 className="text-lg font-bold mb-3">Playlist Management</h3>
+              
+              <div className="space-y-3">
+                <div className="flex space-x-2">
+                  <Input
+                    placeholder="Enter playlist name"
+                    value={currentPlaylistName}
+                    onChange={(e) => setCurrentPlaylistName(e.target.value)}
+                    className="text-sm"
+                  />
+                  <Button size="sm" onClick={savePlaylist} disabled={!currentPlaylistName.trim() || playlist.length === 0}>
+                    <Save className="h-3 w-3 mr-1" />
+                    Save
+                  </Button>
+                </div>
+                
+                {savedPlaylists.length > 0 && (
+                  <div className="flex space-x-2">
+                    <Select value={selectedPlaylistId} onValueChange={setSelectedPlaylistId}>
+                      <SelectTrigger className="text-sm">
+                        <SelectValue placeholder="Select saved playlist" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {savedPlaylists.map(playlist => (
+                          <SelectItem key={playlist.id} value={playlist.id}>
+                            {playlist.name} ({playlist.videos.length})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button size="sm" onClick={() => loadPlaylist(selectedPlaylistId)} disabled={!selectedPlaylistId}>
+                      <FolderOpen className="h-3 w-3" />
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => deletePlaylist(selectedPlaylistId)} disabled={!selectedPlaylistId}>
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </Card>
+
+            {/* Add Single Video */}
+            <Card className="p-4">
+              <h3 className="text-lg font-bold mb-3">Add Single Video</h3>
+              <div className="flex space-x-2">
+                <Input
+                  type="url"
+                  placeholder="Enter video URL..."
+                  value={newUrl}
+                  onChange={(e) => setNewUrl(e.target.value)}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter') {
+                      resolveAndAdd(newUrl);
+                      setNewUrl("");
+                    }
+                  }}
+                  className="text-sm"
+                />
+                <Button size="sm" onClick={() => { resolveAndAdd(newUrl); setNewUrl(""); }}>
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </div>
+            </Card>
+
+            {/* Current Playlist */}
+            <Card className="p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-bold">Current Playlist ({playlist.length})</h3>
+                
+                <div className="flex items-center space-x-1">
+                  {playlist.length > 0 && (
+                    <>
+                      <Button variant="outline" size="sm" onClick={clearPlaylist}>
+                        <Trash2 className="h-3 w-3 mr-1" />
+                        Clear
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={copyPlaylistToClipboard}>
+                        <Copy className="h-3 w-3" />
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={exportPlaylistAsJSON}>
+                        <Download className="h-3 w-3" />
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+              
+              {playlist.length === 0 ? (
+                <p className="text-muted-foreground text-center py-4 text-sm">
+                  Your playlist is empty. Add some videos to get started.
+                </p>
+              ) : (
+                <div className="max-h-80 overflow-y-auto space-y-1">
+                  <DndContext 
+                    sensors={sensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={handleDragEnd}
+                  >
+                    <SortableContext 
+                      items={playlist.map(video => video.id)}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      {playlist.map((video, index) => (
+                        <SortableVideoItem
+                          key={video.id}
+                          video={video}
+                          index={index}
+                          currentVideoIndex={currentVideoIndex}
+                          onPlay={playVideo}
+                          onRemove={removeVideo}
+                        />
+                      ))}
+                    </SortableContext>
+                  </DndContext>
+                </div>
+              )}
+
+              {/* Export Options */}
+              {playlist.length > 0 && (
+                <div className="mt-3 pt-3 border-t">
+                  <div className="flex flex-wrap gap-1">
+                    <Button variant="outline" size="sm" onClick={exportPlaylistAsText}>
+                      TXT
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={exportPlaylistAsJSON}>
+                      JSON
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={exportPlaylistAsM3U8}>
+                      M3U8
+                    </Button>
+                    <div className="relative">
+                      <input
+                        type="file"
+                        accept=".txt,.json,.m3u,.m3u8"
+                        onChange={importPlaylistFromFile}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        id="playlist-import"
+                      />
+                      <Button variant="outline" size="sm" asChild>
+                        <label htmlFor="playlist-import" className="cursor-pointer">
+                          <Upload className="h-3 w-3 mr-1" />
+                          Import
+                        </label>
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </Card>
+          </div>
+        </div>
+
+        {/* Bulk Add Videos */}
+        <Card className="p-6">
+          <h2 className="text-xl font-bold mb-4">Bulk Add Videos</h2>
           <div className="space-y-4">
-            <h3 className="text-lg font-semibold">Search YouTube</h3>
+            <Textarea
+              placeholder="https://youtube.com/watch?v=...&#10;https://vimeo.com/...&#10;https://instagram.com/..."
+              value={bulkUrls}
+              onChange={(e) => setBulkUrls(e.target.value)}
+              rows={4}
+            />
+            <div className="flex space-x-2">
+              <Button onClick={addBulkVideos} disabled={!bulkUrls.trim()}>
+                <Plus className="h-4 w-4 mr-2" />
+                Add All Videos
+              </Button>
+              <div className="relative">
+                <input
+                  type="file"
+                  accept=".txt,.json,.m3u,.m3u8"
+                  onChange={importPlaylistFromFile}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  id="bulk-upload"
+                />
+                <Button variant="outline" asChild>
+                  <label htmlFor="bulk-upload" className="cursor-pointer">
+                    <Upload className="h-4 w-4 mr-2" />
+                    Import File
+                  </label>
+                </Button>
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        {/* YouTube Search */}
+        <Card className="p-6">
+          <h2 className="text-xl font-bold mb-4">Search YouTube</h2>
+          <div className="space-y-4">
             <div className="flex space-x-2">
               <Input
                 placeholder="Search YouTube videos..."
@@ -868,206 +1169,64 @@ export default function PlaylistCreator() {
               </div>
             )}
           </div>
+        </Card>
 
-          {/* Single URL Input */}
-          <div className="space-y-2">
-            <h3 className="text-lg font-semibold">Add Single Video</h3>
-            <div className="flex space-x-2">
-              <Input
-                type="url"
-                placeholder="Enter video URL (YouTube, Vimeo, direct .mp4, Instagram, TikTok...)"
-                value={newUrl}
-                onChange={(e) => setNewUrl(e.target.value)}
-                onKeyPress={(e) => {
-                  if (e.key === 'Enter') {
-                    resolveAndAdd(newUrl);
-                    setNewUrl("");
-                  }
-                }}
-              />
-              <Button onClick={() => { resolveAndAdd(newUrl); setNewUrl(""); }}>
-                <Plus className="h-4 w-4 mr-2" />
-                Add
-              </Button>
-            </div>
-          </div>
-
-          {/* Bookmarklet Generator */}
-          <div className="border rounded-lg p-4 bg-muted/50">
-            <h3 className="font-semibold mb-2">Browser Bookmarklet</h3>
-            <p className="text-sm text-muted-foreground mb-3">
-              Drag this link to your bookmarks bar to quickly add videos from any webpage:
-            </p>
-            <div className="flex items-center space-x-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  navigator.clipboard.writeText(generateBookmarklet());
-                  toast.success("Bookmarklet copied! Create a new bookmark and paste this as the URL.");
-                }}
-              >
-                <Copy className="h-4 w-4 mr-2" />
-                Copy Bookmarklet
-              </Button>
-              <a
-                href={generateBookmarklet()}
-                className="inline-flex items-center px-3 py-1 rounded-md bg-primary text-primary-foreground text-sm hover:bg-primary/90"
-                draggable="true"
-                onClick={(e) => e.preventDefault()}
-              >
-                Add to Playlist
-              </a>
-            </div>
+        {/* Mini Browser */}
+        <Card className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold">Mini Browser</h2>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => setShowBrowser(!showBrowser)}
+            >
+              {showBrowser ? <EyeOff className="h-4 w-4 mr-2" /> : <Eye className="h-4 w-4 mr-2" />}
+              {showBrowser ? 'Hide Browser' : 'Show Browser'}
+            </Button>
           </div>
           
-          {/* Bulk Add */}
-          <div className="space-y-2">
-            <h3 className="text-lg font-semibold">Bulk Add Videos</h3>
-            <Textarea
-              placeholder="https://youtube.com/watch?v=...&#10;https://vimeo.com/...&#10;https://instagram.com/..."
-              value={bulkUrls}
-              onChange={(e) => setBulkUrls(e.target.value)}
-              rows={4}
-            />
-            <div className="flex space-x-2">
-              <Button onClick={addBulkVideos} disabled={!bulkUrls.trim()}>
-                <Plus className="h-4 w-4 mr-2" />
-                Add All Videos
-              </Button>
-              <div className="relative">
-                <input
-                  type="file"
-                  accept=".txt,.json,.m3u,.m3u8"
-                  onChange={importPlaylistFromFile}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                  id="playlist-upload"
+          {showBrowser && (
+            <div className="space-y-4">
+              <div className="flex space-x-2">
+                <Input
+                  placeholder="Enter website URL"
+                  value={browserUrl}
+                  onChange={(e) => setBrowserUrl(e.target.value)}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter') {
+                      navigateBrowser(browserUrl);
+                    }
+                  }}
                 />
-                <Button variant="outline" asChild>
-                  <label htmlFor="playlist-upload" className="cursor-pointer">
-                    <Upload className="h-4 w-4 mr-2" />
-                    Import File
-                  </label>
+                <Button onClick={() => navigateBrowser(browserUrl)}>
+                  <Globe className="h-4 w-4 mr-2" />
+                  Go
+                </Button>
+                <Button variant="outline" onClick={addCurrentBrowserUrl}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add to Playlist
                 </Button>
               </div>
-            </div>
-          </div>
-        </div>
-      </Card>
-
-      {/* Mini Browser */}
-      <Card className="p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-2xl font-bold">Mini Browser</h2>
-          <Button 
-            variant="outline" 
-            size="sm" 
-            onClick={() => setShowBrowser(!showBrowser)}
-          >
-            {showBrowser ? <EyeOff className="h-4 w-4 mr-2" /> : <Eye className="h-4 w-4 mr-2" />}
-            {showBrowser ? 'Hide Browser' : 'Show Browser'}
-          </Button>
-        </div>
-        
-        {showBrowser && (
-          <div className="space-y-4">
-            <div className="flex space-x-2">
-              <Input
-                placeholder="Enter website URL"
-                value={browserUrl}
-                onChange={(e) => setBrowserUrl(e.target.value)}
-                onKeyPress={(e) => {
-                  if (e.key === 'Enter') {
-                    navigateBrowser(browserUrl);
-                  }
-                }}
-              />
-              <Button onClick={() => navigateBrowser(browserUrl)}>
-                <Globe className="h-4 w-4 mr-2" />
-                Go
-              </Button>
-              <Button variant="outline" onClick={addCurrentBrowserUrl}>
-                <Plus className="h-4 w-4 mr-2" />
-                Add to Playlist
-              </Button>
-            </div>
-            
-            <div className="aspect-video bg-muted rounded-lg overflow-hidden">
-              <iframe
-                ref={browserRef}
-                src={browserUrl}
-                className="w-full h-full"
-                title="Mini Browser"
-                sandbox="allow-scripts allow-popups allow-forms"
-              />
-            </div>
-          </div>
-        )}
-        
-        {!showBrowser && (
-          <p className="text-muted-foreground text-center py-8">
-            Click "Show Browser" to browse websites and add videos directly to your playlist.
-          </p>
-        )}
-      </Card>
-
-      {/* Current Playlist */}
-      <Card className="p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-2xl font-bold">Current Playlist ({playlist.length} videos)</h2>
-          
-          {playlist.length > 0 && (
-            <div className="flex items-center space-x-2">
-              <Button variant="outline" size="sm" onClick={copyPlaylistToClipboard}>
-                <Copy className="h-4 w-4 mr-2" />
-                Copy URLs
-              </Button>
-              <Button variant="outline" size="sm" onClick={exportPlaylistAsText}>
-                <Download className="h-4 w-4 mr-2" />
-                Export TXT
-              </Button>
-              <Button variant="outline" size="sm" onClick={exportPlaylistAsJSON}>
-                <Download className="h-4 w-4 mr-2" />
-                Export JSON
-              </Button>
-              <Button variant="outline" size="sm" onClick={exportPlaylistAsM3U8}>
-                <Download className="h-4 w-4 mr-2" />
-                Export M3U8
-              </Button>
+              
+              <div className="aspect-video bg-muted rounded-lg overflow-hidden">
+                <iframe
+                  ref={browserRef}
+                  src={browserUrl}
+                  className="w-full h-full"
+                  title="Mini Browser"
+                  sandbox="allow-scripts allow-popups allow-forms"
+                />
+              </div>
             </div>
           )}
-        </div>
-        
-        {playlist.length === 0 ? (
-          <p className="text-muted-foreground text-center py-8">
-            Your playlist is empty. Add some videos above to get started.
-          </p>
-        ) : (
-          <DndContext 
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
-          >
-            <SortableContext 
-              items={playlist.map(video => video.id)}
-              strategy={verticalListSortingStrategy}
-            >
-              <div className="space-y-2">
-                {playlist.map((video, index) => (
-                  <SortableVideoItem
-                    key={video.id}
-                    video={video}
-                    index={index}
-                    currentVideoIndex={currentVideoIndex}
-                    onPlay={playVideo}
-                    onRemove={removeVideo}
-                  />
-                ))}
-              </div>
-            </SortableContext>
-          </DndContext>
-        )}
-      </Card>
-    </section>
+          
+          {!showBrowser && (
+            <p className="text-muted-foreground text-center py-8">
+              Click "Show Browser" to browse websites and add videos directly to your playlist.
+            </p>
+          )}
+        </Card>
+      </section>
+    </div>
   );
 }
