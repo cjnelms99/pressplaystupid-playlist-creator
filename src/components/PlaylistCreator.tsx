@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
+import { useTheme } from "@/contexts/ThemeContext";
 import { 
   Trash2, 
   GripVertical, 
@@ -24,7 +25,9 @@ import {
   Search,
   Layout,
   PictureInPicture,
-  X
+  X,
+  Moon,
+  Sun
 } from "lucide-react";
 
 import {
@@ -164,6 +167,9 @@ export default function PlaylistCreator() {
   const [savedPlaylists, setSavedPlaylists] = useState<SavedPlaylist[]>([]);
   const [currentPlaylistName, setCurrentPlaylistName] = useState("");
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string>("");
+  
+  // Theme
+  const { darkModeOption, setDarkModeOption, isDarkMode, setIsVideoPlaying } = useTheme();
   
   const playerRef = useRef<HTMLIFrameElement>(null);
   const browserRef = useRef<HTMLIFrameElement>(null);
@@ -510,13 +516,20 @@ export default function PlaylistCreator() {
   };
 
   const togglePlayPause = () => {
-    setIsPlaying(!isPlaying);
+    const newPlayingState = !isPlaying;
+    setIsPlaying(newPlayingState);
+    setIsVideoPlaying(newPlayingState && !!currentVideo);
   };
 
   // Picture-in-Picture functionality
   const togglePiP = useCallback(() => {
     setIsPiPMode(!isPiPMode);
   }, [isPiPMode]);
+
+  // Update theme context when video changes or starts/stops
+  useEffect(() => {
+    setIsVideoPlaying(isPlaying && !!currentVideo);
+  }, [isPlaying, currentVideo, setIsVideoPlaying]);
 
   // Clear playlist functionality
   const clearPlaylist = () => {
@@ -870,7 +883,7 @@ export default function PlaylistCreator() {
                   <SelectTrigger className="w-32">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="bg-popover border border-border z-50">
                     <SelectItem value="left">Video Left</SelectItem>
                     <SelectItem value="right">Video Right</SelectItem>
                     <SelectItem value="top">Video Top</SelectItem>
@@ -878,6 +891,22 @@ export default function PlaylistCreator() {
                   </SelectContent>
                 </Select>
               </div>
+              
+              {/* Dark Mode Toggle */}
+              <div className="flex items-center space-x-2">
+                {isDarkMode ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
+                <Select value={darkModeOption} onValueChange={setDarkModeOption}>
+                  <SelectTrigger className="w-36">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-popover border border-border z-50">
+                    <SelectItem value="off">Light Mode</SelectItem>
+                    <SelectItem value="always">Always Dark</SelectItem>
+                    <SelectItem value="while-playing">Dark While Playing</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              
               <Button variant="outline" size="sm" onClick={togglePiP}>
                 <PictureInPicture className="h-4 w-4 mr-2" />
                 {isPiPMode ? 'Exit PiP' : 'Picture-in-Picture'}
@@ -964,7 +993,7 @@ export default function PlaylistCreator() {
                       <SelectTrigger className="text-sm">
                         <SelectValue placeholder="Select saved playlist" />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent className="bg-popover border border-border z-50">
                         {savedPlaylists.map(playlist => (
                           <SelectItem key={playlist.id} value={playlist.id}>
                             {playlist.name} ({playlist.videos.length})
